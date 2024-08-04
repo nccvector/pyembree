@@ -12,6 +12,11 @@ void errorFunction(void *userPtr, enum RTCError error, const char *str) {
     printf("error %d: %s\n", error, str);
 }
 
+template<class T>
+py::array_t<T> CreateNumpyArray(const std::vector<T> &vector) {
+    return py::array_t<T>({(ssize_t) vector.size()}, vector.data());
+}
+
 struct RTC_ALIGN(16) Py_RTCRay {
     float org_x;        // x coordinate of ray origin
     float org_y;        // y coordinate of ray origin
@@ -241,20 +246,33 @@ public:
         rtcCommitScene(rtcScene);
     }
 
-    Py_RTCRayHit CastRay(py::array_t<float> origin, py::array_t<float> direction) {
-        py::buffer_info originBuffInfo = origin.request();
-        float *originPtr = static_cast<float *>(originBuffInfo.ptr);
+    std::tuple<
+        py::array_t<float, 6>,  // ray
+        py::array_t<float, 3>,  // time, near, far
+        py::array_t<unsigned int, 5>   // mask, flags, primID, geomID, instID
+    >
+    CastRays() {
+        return {};
+    }
 
-        py::buffer_info directionBuffInfo = direction.request();
-        float *directionPtr = static_cast<float *>(directionBuffInfo.ptr);
+
+    std::tuple<
+        py::array_t<float>,  // time, near, far
+        py::array_t<float>,  // hit normal
+        py::array_t<float>,  // hit uv
+        py::array_t<unsigned int>   // id, mask, flags, primID, geomID, instID
+    >
+    CastRay(py::array_t<float, 6> ray) {
+        py::buffer_info rayBuffInfo = ray.request();
+        float *rayPtr = static_cast<float *>(rayBuffInfo.ptr);
 
         struct RTCRayHit rayhit;
-        rayhit.ray.org_x = originPtr[0];
-        rayhit.ray.org_y = originPtr[1];
-        rayhit.ray.org_z = originPtr[2];
-        rayhit.ray.dir_x = directionPtr[0];
-        rayhit.ray.dir_y = directionPtr[1];
-        rayhit.ray.dir_z = directionPtr[2];
+        rayhit.ray.org_x = rayPtr[0];
+        rayhit.ray.org_y = rayPtr[1];
+        rayhit.ray.org_z = rayPtr[2];
+        rayhit.ray.dir_x = rayPtr[3];
+        rayhit.ray.dir_y = rayPtr[4];
+        rayhit.ray.dir_z = rayPtr[5];
         rayhit.ray.tnear = 0;
         rayhit.ray.tfar = std::numeric_limits<float>::infinity();
         rayhit.ray.mask = -1;
@@ -264,7 +282,7 @@ public:
 
         rtcIntersect1((RTCScene) rtcScene, &rayhit);
 
-        printf("%f, %f, %f: ", originPtr[0], originPtr[1], originPtr[2]);
+        printf("%f, %f, %f: ", rayPtr[0], rayPtr[1], rayPtr[2]);
         if (rayhit.hit.geomID != RTC_INVALID_GEOMETRY_ID) {
             printf(
                 "Found intersection on geometry %d, primitive %d at tfar=%f\n",
@@ -275,44 +293,46 @@ public:
         } else
             printf("Did not find any intersection.\n");
 
-        Py_RTCRayHit pyRayHit;
-        pyRayHit.ray.org_x = rayhit.ray.org_x;
-        pyRayHit.ray.org_y = rayhit.ray.org_y;
-        pyRayHit.ray.org_z = rayhit.ray.org_z;
+        py::array_t<float> timeNearFar = CreateNumpyArray<float>(
+            {
+                rayhit.ray.time,
+                rayhit.ray.tnear,
+                rayhit.ray.tfar
+            }
+        );
 
-        pyRayHit.ray.dir_x = rayhit.ray.dir_x;
-        pyRayHit.ray.dir_y = rayhit.ray.dir_y;
-        pyRayHit.ray.dir_z = rayhit.ray.dir_z;
+        py::array_t<float> hitNormal = CreateNumpyArray<float>(
+            {
+                rayhit.hit.Ng_x,
+                rayhit.hit.Ng_y,
+                rayhit.hit.Ng_z,
+            }
+        );
 
-        pyRayHit.ray.tnear = rayhit.ray.tnear;
-        pyRayHit.ray.tfar = rayhit.ray.tfar;
+        py::array_t<float> hitUV = CreateNumpyArray<float>(
+            {
+                rayhit.hit.u,
+                rayhit.hit.v,
+            }
+        );
 
-        pyRayHit.ray.time = rayhit.ray.time;
-        pyRayHit.ray.mask = rayhit.ray.mask;
-        pyRayHit.ray.id = rayhit.ray.id;
-        pyRayHit.ray.flags = rayhit.ray.flags;
+        py::array_t<unsigned int> idMaskFlag = CreateNumpyArray<unsigned int>(
+            {
+                rayhit.ray.id,
+                rayhit.ray.mask,
+                rayhit.ray.flags,
+                rayhit.hit.primID,
+                rayhit.hit.geomID,
+                rayhit.hit.instID[0]
+            }
+        );
 
-
-        pyRayHit.hit.Ng_x = rayhit.hit.Ng_x;
-        pyRayHit.hit.Ng_y = rayhit.hit.Ng_y;
-        pyRayHit.hit.Ng_z = rayhit.hit.Ng_z;
-
-        pyRayHit.hit.u = rayhit.hit.u;
-        pyRayHit.hit.v = rayhit.hit.v;
-
-        pyRayHit.hit.primID = rayhit.hit.primID;
-        pyRayHit.hit.geomID = rayhit.hit.geomID;
-
-        std::copy(
-            std::begin(rayhit.hit.instID),
-            std::end(rayhit.hit.instID),
-            std::begin(pyRayHit.hit.instID)
-            );
-//        for (int i = 0; i < RTC_MAX_INSTANCE_LEVEL_COUNT; i++) {
-//            pyRayHit.hit.instID[i] = rayhit.hit.instID[i];
-//        }
-
-        return pyRayHit;
+        return std::make_tuple(
+            timeNearFar,
+            hitNormal,
+            hitUV,
+            idMaskFlag
+        );
     }
 
     RTCScene rtcScene;
