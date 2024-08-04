@@ -350,16 +350,16 @@ public:
 
         rtcIntersect1((RTCScene) rtcScene, &rayhit);
 
-        printf("%f, %f, %f: ", ray[0], ray[1], ray[2]);
-        if (rayhit.hit.geomID != RTC_INVALID_GEOMETRY_ID) {
-            printf(
-                "Found intersection on geometry %d, primitive %d at tfar=%f\n",
-                rayhit.hit.geomID,
-                rayhit.hit.primID,
-                rayhit.ray.tfar
-            );
-        } else
-            printf("Did not find any intersection.\n");
+//        printf("%f, %f, %f: ", ray[0], ray[1], ray[2]);
+//        if (rayhit.hit.geomID != RTC_INVALID_GEOMETRY_ID) {
+//            printf(
+//                "Found intersection on geometry %d, primitive %d at tfar=%f\n",
+//                rayhit.hit.geomID,
+//                rayhit.hit.primID,
+//                rayhit.ray.tfar
+//            );
+//        } else
+//            printf("Did not find any intersection.\n");
 
         std::array<float, 3> timeNearFar = {
             rayhit.ray.time,
