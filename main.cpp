@@ -17,6 +17,29 @@ py::array_t<T> CreateNumpyArray(const std::vector<T> &vector) {
     return py::array_t<T>({(ssize_t) vector.size()}, vector.data());
 }
 
+template<class T, std::size_t N>
+py::array_t<T, py::array::c_style>
+Create2DNumpyArray(const std::vector<std::array<T, N>> &vector) {
+    size_t rows = vector.size();
+    size_t cols = N;
+    // Define the shape and strides of the 2D array
+    std::vector<size_t> shape = {rows, cols};
+    std::vector<size_t> strides = {cols * sizeof(T), sizeof(T)};
+
+    // Create and return the py::array_t<float> from the raw C++ 2D array
+    py::array_t<T, py::array::c_style> new2DArray(shape, strides);
+
+    auto ra = new2DArray.mutable_unchecked();
+
+    for (size_t i = 0; i < rows; i++) {
+        for (size_t j = 0; j < cols; j++) {
+            ra(i, j) = vector[i][j];
+        }
+    }
+
+    return new2DArray;
+}
+
 struct RTC_ALIGN(16) Py_RTCRay {
     float org_x;        // x coordinate of ray origin
     float org_y;        // y coordinate of ray origin
@@ -247,32 +270,77 @@ public:
     }
 
     std::tuple<
-        py::array_t<float, 6>,  // ray
-        py::array_t<float, 3>,  // time, near, far
-        py::array_t<unsigned int, 5>   // mask, flags, primID, geomID, instID
-    >
-    CastRays() {
-        return {};
-    }
-
-
-    std::tuple<
         py::array_t<float>,  // time, near, far
         py::array_t<float>,  // hit normal
         py::array_t<float>,  // hit uv
-        py::array_t<unsigned int>   // id, mask, flags, primID, geomID, instID
+        py::array_t<unsigned int>// id, mask, flags, primID, geomID, instID
     >
-    CastRay(py::array_t<float, 6> ray) {
-        py::buffer_info rayBuffInfo = ray.request();
-        float *rayPtr = static_cast<float *>(rayBuffInfo.ptr);
+    CastRays(std::vector<std::array<float, 6>> rays) {
+        std::tuple<
+            std::vector<std::array<float, 3>>,  // time, near, far
+            std::vector<std::array<float, 3>>,  // hit normal
+            std::vector<std::array<float, 2>>,  // hit uv
+            std::vector<std::array<unsigned int, 6>>   // id, mask, flags, primID, geomID, instID
+        > result = _CastRays(rays);
 
+        // Convert to numpy array
+        return std::make_tuple(
+
+            Create2DNumpyArray(std::get<0>(result)),
+            Create2DNumpyArray(std::get<1>(result)),
+            Create2DNumpyArray(std::get<2>(result)),
+            Create2DNumpyArray(std::get<3>(result))
+        );
+    }
+
+    std::tuple<
+        std::vector<std::array<float, 3>>,  // time, near, far
+        std::vector<std::array<float, 3>>,  // hit normal
+        std::vector<std::array<float, 2>>,  // hit uv
+        std::vector<std::array<unsigned int, 6>>   // id, mask, flags, primID, geomID, instID
+    >
+    _CastRays(std::vector<std::array<float, 6>> rays) {
+        std::vector<std::array<float, 3>> timeNearFarList;
+        std::vector<std::array<float, 3>> hitNormalList;
+        std::vector<std::array<float, 2>> hitUVList;
+        std::vector<std::array<unsigned int, 6>> idMaskFlags;
+
+        for (auto ray: rays) {
+            std::tuple<
+                std::array<float, 3>,  // time, near, far
+                std::array<float, 3>,  // hit normal
+                std::array<float, 2>,  // hit uv
+                std::array<unsigned int, 6>   // id, mask, flags, primID, geomID, instID
+            > result = _CastRay(ray);
+
+            timeNearFarList.push_back(std::get<0>(result));
+            hitNormalList.push_back(std::get<1>(result));
+            hitUVList.push_back(std::get<2>(result));
+            idMaskFlags.push_back(std::get<3>(result));
+        }
+
+        return std::make_tuple(
+            timeNearFarList,
+            hitNormalList,
+            hitUVList,
+            idMaskFlags
+        );
+    }
+
+    std::tuple<
+        std::array<float, 3>,  // time, near, far
+        std::array<float, 3>,  // hit normal
+        std::array<float, 2>,  // hit uv
+        std::array<unsigned int, 6>   // id, mask, flags, primID, geomID, instID
+    >
+    _CastRay(std::array<float, 6> ray) {
         struct RTCRayHit rayhit;
-        rayhit.ray.org_x = rayPtr[0];
-        rayhit.ray.org_y = rayPtr[1];
-        rayhit.ray.org_z = rayPtr[2];
-        rayhit.ray.dir_x = rayPtr[3];
-        rayhit.ray.dir_y = rayPtr[4];
-        rayhit.ray.dir_z = rayPtr[5];
+        rayhit.ray.org_x = ray[0];
+        rayhit.ray.org_y = ray[1];
+        rayhit.ray.org_z = ray[2];
+        rayhit.ray.dir_x = ray[3];
+        rayhit.ray.dir_y = ray[4];
+        rayhit.ray.dir_z = ray[5];
         rayhit.ray.tnear = 0;
         rayhit.ray.tfar = std::numeric_limits<float>::infinity();
         rayhit.ray.mask = -1;
@@ -282,7 +350,7 @@ public:
 
         rtcIntersect1((RTCScene) rtcScene, &rayhit);
 
-        printf("%f, %f, %f: ", rayPtr[0], rayPtr[1], rayPtr[2]);
+        printf("%f, %f, %f: ", ray[0], ray[1], ray[2]);
         if (rayhit.hit.geomID != RTC_INVALID_GEOMETRY_ID) {
             printf(
                 "Found intersection on geometry %d, primitive %d at tfar=%f\n",
@@ -293,39 +361,31 @@ public:
         } else
             printf("Did not find any intersection.\n");
 
-        py::array_t<float> timeNearFar = CreateNumpyArray<float>(
-            {
-                rayhit.ray.time,
-                rayhit.ray.tnear,
-                rayhit.ray.tfar
-            }
-        );
+        std::array<float, 3> timeNearFar = {
+            rayhit.ray.time,
+            rayhit.ray.tnear,
+            rayhit.ray.tfar,
+        };
 
-        py::array_t<float> hitNormal = CreateNumpyArray<float>(
-            {
-                rayhit.hit.Ng_x,
-                rayhit.hit.Ng_y,
-                rayhit.hit.Ng_z,
-            }
-        );
+        std::array<float, 3> hitNormal = {
+            rayhit.hit.Ng_x,
+            rayhit.hit.Ng_y,
+            rayhit.hit.Ng_z,
+        };
 
-        py::array_t<float> hitUV = CreateNumpyArray<float>(
-            {
-                rayhit.hit.u,
-                rayhit.hit.v,
-            }
-        );
+        std::array<float, 2> hitUV = {
+            rayhit.hit.u,
+            rayhit.hit.v,
+        };
 
-        py::array_t<unsigned int> idMaskFlag = CreateNumpyArray<unsigned int>(
-            {
-                rayhit.ray.id,
-                rayhit.ray.mask,
-                rayhit.ray.flags,
-                rayhit.hit.primID,
-                rayhit.hit.geomID,
-                rayhit.hit.instID[0]
-            }
-        );
+        std::array<unsigned int, 6> idMaskFlag = {
+            rayhit.ray.id,
+            rayhit.ray.mask,
+            rayhit.ray.flags,
+            rayhit.hit.primID,
+            rayhit.hit.geomID,
+            rayhit.hit.instID[0],
+        };
 
         return std::make_tuple(
             timeNearFar,
@@ -341,6 +401,8 @@ public:
 
 PYBIND11_MODULE(pyembree, m) {
     m.doc() = "Intel Embree Python Bindings"; // optional module docstring
+
+    m.attr("RTC_INVALID_GEOMETRY_ID") = py::int_(RTC_INVALID_GEOMETRY_ID);
 
     pybind11::enum_<RTCGeometryType>(m, "RTCGeometryType")
         .value("RTC_GEOMETRY_TYPE_TRIANGLE", RTC_GEOMETRY_TYPE_TRIANGLE)
@@ -471,7 +533,7 @@ PYBIND11_MODULE(pyembree, m) {
         .def(pybind11::init<Py_RTCDevice>())
         .def("CreateNewGeometry", &Py_RTCScene::CreateNewGeometry, "Function to create a new RTCScene")
         .def("Commit", &Py_RTCScene::CommitScene, "Commit the scene")
-        .def("CastRay", &Py_RTCScene::CastRay, "Cast a ray in the scene");
+        .def("CastRays", &Py_RTCScene::CastRays, "Cast rays in the scene");
 
     py::class_<Py_RTCRay>(m, "RTCRay")
         .def(py::init<>())
