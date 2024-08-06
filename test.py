@@ -1,13 +1,28 @@
+import math
 import numpy
 import matplotlib.pyplot as plt
 from pyembree import *
 numpy.set_printoptions(suppress=True)
 
-IMAGE_WIDTH, IMAGE_HEIGHT = 640, 480
+IMAGE_WIDTH, IMAGE_HEIGHT = 1000, 800
 ASPECT_RATIO = float(IMAGE_WIDTH) / float(IMAGE_HEIGHT)
 VERTICAL_FOV = 45.0
 HORIZONTAL_FOV = ASPECT_RATIO * VERTICAL_FOV
 
+def MatrixFromAxisAngle(axis, angle):
+    """
+    Return the rotation matrix associated with counterclockwise rotation about
+    the given axis by angle radians.
+    """
+    axis = numpy.array(axis)
+    axis = axis / math.sqrt(numpy.dot(axis, axis))
+    a = math.cos(angle/ 2.0)
+    b, c, d = -axis * math.sin(angle/ 2.0)
+    aa, bb, cc, dd = a * a, b * b, c * c, d * d
+    bc, ad, ac, ab, bd, cd = b * c, a * d, a * c, a * b, b * d, c * d
+    return numpy.array([[aa + bb - cc - dd, 2 * (bc + ad), 2 * (bd - ac)],
+                     [2 * (bc - ad), aa + cc - bb - dd, 2 * (cd + ab)],
+                     [2 * (bd + ac), 2 * (cd - ab), aa + dd - bb - cc]])
 
 def MorphIntoImage(data):
     dataImage = data.reshape(IMAGE_HEIGHT, IMAGE_WIDTH, 3)
@@ -67,6 +82,10 @@ vertices = numpy.array([
     [-1, 1, 0]
 ], dtype=numpy.float32)
 
+# Rotate vertices about x-axis by 45 degrees
+R = MatrixFromAxisAngle([1, 0, 0], numpy.deg2rad(45.0))
+vertices = vertices.dot(R.T)
+
 indices = numpy.array([
     [0, 1, 2],
     [0, 2, 3],
@@ -84,7 +103,7 @@ print("Camera Matrix inverse Kinv: {}".format(Kinv))
 pixelCoords = GetPixelCoordinates(IMAGE_WIDTH, IMAGE_HEIGHT)
 print("Pixel coords: {}".format(pixelCoords))
 rays = numpy.zeros((pixelCoords.shape[0], 6), dtype=numpy.float)
-rays[:, 2] = -1.0
+rays[:, 2] = -3.0
 rays[:, 3:] = GetCameraRayDirections(Kinv, pixelCoords)
 print("Rays: {}".format(rays))
 
